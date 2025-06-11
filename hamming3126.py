@@ -73,7 +73,7 @@ def codificar_arquivo(caminho: Path) -> Path:
 # Decodificação
 
 def descobrir_pos_erro(palavra_bits: list[int]) -> int:
-    # Retorna a posição do bit errado (0 se nenhum ou se houver 2 ou + erros).
+    # Retorna a posição do bit errado (0 se nenhum erro, não trata mais de 1 erro).
     pos_erro = 0
     for pos_paridade in POS_PARIDADE:
         xor_acumulado = 0
@@ -96,12 +96,9 @@ def decodificar_arquivo(caminho: Path) -> Path:
         palavra = [0] + [int(c) for c in str_palavra]  # 1‑based
         pos_erro = descobrir_pos_erro(palavra)
 
-        if pos_erro: # tenta corrigir 1 erro
-            if 1 <= pos_erro <= TAMANHO_PALAVRA:
-                palavra[pos_erro] ^= 1
-            else:
-                raise ValueError('Múltiplos erros detectados: não foi possível corrigir.')
-
+        if 1 <= pos_erro <= TAMANHO_PALAVRA:
+            palavra[pos_erro] ^= 1
+            
         bitstream.extend(palavra[pos] for pos in POS_DADOS)
 
     tamanho_original = bits_para_inteiro(bitstream[:32]) # 32 primeiros bits = cabeçalho com o número de bytes originais do arquivo.

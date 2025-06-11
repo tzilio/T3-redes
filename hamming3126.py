@@ -1,114 +1,132 @@
 #!/usr/bin/env python3
 """
-Hamming (31, 26) – 1 erro corrigido, 2 erros detectados.
+Codificador/decodificador Hamming (31, 26).
 
 Uso:
-    python hamming3126.py encode meu_arquivo.txt
-    python hamming3126.py decode meu_arquivo.txt.hamming
+    python hamming3126.py codificar  arquivo.txt
+    python hamming3126.py decodificar arquivo.txt.hamming
 """
 
 import argparse
 from pathlib import Path
 
-PARITY_POS = [1, 2, 4, 8, 16]                # posições (1-based) dos bits de paridade
-DATA_POS   = [i for i in range(1, 32) if i not in PARITY_POS]
+# Constantes
+TAMANHO_PALAVRA = 31
+POS_PARIDADE = [1, 2, 4, 8, 16] # posições (1‑based) reservadas à paridade
+POS_DADOS = [i for i in range(1, 32) if i not in POS_PARIDADE]
 
-def bits_from_int(value: int, length: int) -> list[int]:
-    return [(value >> i) & 1 for i in reversed(range(length))]
+# Utilidades de conversão
 
-def int_from_bits(bits: list[int]) -> int:
-    v = 0
-    for b in bits:
-        v = (v << 1) | b
-    return v
+def inteiro_para_bits(valor: int, tamanho: int) -> list[int]:
+    return [(valor >> i) & 1 for i in reversed(range(tamanho))]
 
-# ----------------------------------------------------------------------
-# ENCODE
-# ----------------------------------------------------------------------
-def encode_file(path: Path) -> Path:
-    raw = path.read_bytes()
-    length_bits = bits_from_int(len(raw), 32)            # cabeçalho: 32 bits com tamanho original
-    payload_bits = length_bits + bits_from_int(int.from_bytes(raw, 'big'), len(raw)*8)
 
-    codewords = []
-    while payload_bits:
-        data_block = payload_bits[:26]
-        payload_bits = payload_bits[26:]
-        data_block += [0]*(26-len(data_block))           # padding final
+def bits_para_inteiro(bits: list[int]) -> int:
+    resultado = 0
+    for bit in bits:
+        resultado = (resultado << 1) | bit
+    return resultado
 
-        word = [0]*32                                    # índice 1-based … usando word[1]
-        for bit, pos in zip(data_block, DATA_POS):
-            word[pos] = bit
+# Cálculo de paridade
 
-        # calcular paridades de ordem 0-4
-        for i, p in enumerate(PARITY_POS):
-            xor_sum = 0
-            for pos in range(1, 32):
-                if pos & p and pos != p:
-                    xor_sum ^= word[pos]
-            word[p] = xor_sum
+def calcular_paridades(palavra_bits: list[int]) -> None:
+    # Calcula os bits de paridade e os insere nas posições 1, 2, 4, 8 e 16 da lista 1-based 'palavra'.
+    # Cada paridade em 'pos_paridade' verifica as posições cujo índice tem esse bit ativado.
+    # O valor da paridade é o XOR de todos os bits das posições verificadas.
+    for pos_paridade in POS_PARIDADE:
+        xor_acumulado = 0
+        for indice in range(1, TAMANHO_PALAVRA + 1):
+            if indice != pos_paridade and indice & pos_paridade:
+                xor_acumulado ^= palavra_bits[indice]
+        palavra_bits[pos_paridade] = xor_acumulado
 
-        codewords.append(''.join(str(b) for b in word[1:]))
+# Codificação
 
-    out_path = path.with_suffix(path.suffix + '.hamming')
-    out_path.write_text(' '.join(codewords))
-    return out_path
+def codificar_arquivo(caminho: Path) -> Path:
+    dados_bytes = caminho.read_bytes()
 
-# ----------------------------------------------------------------------
-# DECODE
-# ----------------------------------------------------------------------
-def decode_file(path: Path) -> Path:
-    codewords = path.read_text().split()
+    # Cabeçalho de 32 bits indicando o tamanho original do arquivo em bytes.
+    bits_cabecalho = inteiro_para_bits(len(dados_bytes), 32)
+
+    # Converte todos os bytes do arquivo em bits e concatena com o cabeçalho,
+    # formando uma lista única que será dividida em blocos de 26 bits na decodificação.
+    bits_conteudo = inteiro_para_bits(int.from_bytes(dados_bytes, 'big'), len(dados_bytes) * 8)
+    bitstream = bits_cabecalho + bits_conteudo
+
+    palavras_codificadas: list[str] = []
+    while bitstream:
+        bloco_dados = bitstream[:26]
+        bitstream = bitstream[26:]
+        bloco_dados += [0] * (26 - len(bloco_dados))  # padding no bloco final para garantir 26 bits.
+
+        palavra_bits = [0] * 32  # índice 0 é descartado; usamos 1..31
+        for bit, pos in zip(bloco_dados, POS_DADOS):
+            palavra_bits[pos] = bit
+
+        calcular_paridades(palavra_bits)
+        palavras_codificadas.append(''.join(str(b) for b in palavra_bits[1:]))
+
+    destino = caminho.with_suffix(caminho.suffix + '.hamming')
+    destino.write_text(' '.join(palavras_codificadas))
+    return destino
+
+# Decodificação
+
+def descobrir_pos_erro(palavra_bits: list[int]) -> int:
+    # Retorna a posição do bit errado (0 se nenhum ou se houver 2 ou + erros).
+    pos_erro = 0
+    for pos_paridade in POS_PARIDADE:
+        xor_acumulado = 0
+        for indice in range(1, TAMANHO_PALAVRA + 1):
+            if indice & pos_paridade:
+                xor_acumulado ^= palavra_bits[indice]
+        if xor_acumulado:
+            pos_erro |= pos_paridade
+    return pos_erro
+
+
+def decodificar_arquivo(caminho: Path) -> Path:
+    palavras = caminho.read_text().split()
     bitstream: list[int] = []
 
-    for w in codewords:
-        if len(w) != 31:
-            raise ValueError(f"Palavra-código de tamanho inesperado: {w!r}")
+    for str_palavra in palavras:
+        if len(str_palavra) != TAMANHO_PALAVRA:
+            raise ValueError(f'Palavra de tamanho inválido: {str_palavra!r}')
 
-        word = [0] + [int(c) for c in w]                 # 1-based outra vez
-        syndrome = 0
-        for i, p in enumerate(PARITY_POS):
-            xor_sum = 0
-            for pos in range(1, 32):
-                if pos & p:
-                    xor_sum ^= word[pos]
-            if xor_sum:
-                syndrome |= p
+        palavra = [0] + [int(c) for c in str_palavra]  # 1‑based
+        pos_erro = descobrir_pos_erro(palavra)
 
-        if syndrome:                                     # corrige 1 bit
-            if 1 <= syndrome <= 31:
-                word[syndrome] ^= 1
+        if pos_erro: # tenta corrigir 1 erro
+            if 1 <= pos_erro <= TAMANHO_PALAVRA:
+                palavra[pos_erro] ^= 1
             else:
-                raise ValueError("Síndrome fora de alcance – possivelmente >1 erro")
+                raise ValueError('Múltiplos erros detectados: não foi possível corrigir.')
 
-        bitstream.extend(word[pos] for pos in DATA_POS)
+        bitstream.extend(palavra[pos] for pos in POS_DADOS)
 
-    # Extrai tamanho original (32 bits) + bytes
-    original_len = int_from_bits(bitstream[:32])
-    data_bits = bitstream[32:32+original_len*8]
-    data_int = int_from_bits(data_bits)
-    decoded = data_int.to_bytes(original_len, 'big')
+    tamanho_original = bits_para_inteiro(bitstream[:32]) # 32 primeiros bits = cabeçalho com o número de bytes originais do arquivo.
+    bits_dados = bitstream[32:32 + tamanho_original * 8] # ignora os 32 bits iniciais
+    dados_recuperados = bits_para_inteiro(bits_dados).to_bytes(tamanho_original, 'big') # recupera conteúdo original do arquivo em bytes
 
-    out_path = path.with_suffix('.dec')
-    out_path.write_bytes(decoded)
-    return out_path
+    destino = caminho.with_suffix('.dec')
+    destino.write_bytes(dados_recuperados)
+    return destino
 
-# ----------------------------------------------------------------------
 # CLI
-# ----------------------------------------------------------------------
-def main():
-    ap = argparse.ArgumentParser(description="Hamming (31, 26) encoder/decoder")
-    ap.add_argument('mode', choices=('encode', 'decode'))
-    ap.add_argument('file', help='arquivo de entrada')
-    args = ap.parse_args()
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Codifica ou decodifica arquivos usando Hamming (31, 26).')
+    parser.add_argument('modo', choices=('codificar', 'decodificar'))
+    parser.add_argument('arquivo', help='caminho do arquivo de entrada')
+    args = parser.parse_args()
 
-    p = Path(args.file)
-    if args.mode == 'encode':
-        out = encode_file(p)
-        print(f"[OK] Arquivo codificado em: {out}")
+    caminho = Path(args.arquivo)
+    if args.modo == 'codificar':
+        saida = codificar_arquivo(caminho)
+        print(f'[OK] Arquivo codificado: {saida}')
     else:
-        out = decode_file(p)
-        print(f"[OK] Arquivo decodificado em: {out}")
+        saida = decodificar_arquivo(caminho)
+        print(f'[OK] Arquivo decodificado: {saida}')
+
 
 if __name__ == '__main__':
     main()
